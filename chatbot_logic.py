@@ -21,14 +21,41 @@ class ChatbotLogic:
         """
         results = self.neo4j_handler.execute_query(query)
         self.program_name_mapping = {}
+        self.program_alias_mapping = {}
+
         if results:
             for record in results:
-                standard_name = record['ten_chuong_trinh']
-                self.program_name_mapping[standard_name.lower()] = standard_name
-                if standard_name == "Kỹ thuật Cơ Điện tử":
-                    self.program_name_mapping["cơ điện tử"] = standard_name
-                if standard_name == "Công nghệ chế tạo máy":
-                    self.program_name_mapping["chế tạo máy"] = standard_name
+                full_name = record['ten_chuong_trinh']
+                lower_full = full_name.lower()
+
+                # Lưu tên gốc và dạng viết thường
+                self.program_name_mapping[lower_full] = full_name
+
+                # Một số từ khoá rút gọn, alias
+                if "cơ điện tử" in lower_full:
+                    self.program_alias_mapping["cơ điện tử"] = full_name
+                if "chế tạo máy" in lower_full:
+                    self.program_alias_mapping["chế tạo máy"] = full_name
+                if "nhúng" in lower_full:
+                    self.program_alias_mapping["nhúng"] = full_name
+                    self.program_alias_mapping["tiên tiến nhúng"] = full_name
+                if "pfiev" in lower_full:
+                    self.program_alias_mapping["pfiev"] = full_name
+                if "tàu thủy" in lower_full:
+                    self.program_alias_mapping["tàu thủy"] = full_name
+                if "điện tử" in lower_full:
+                    self.program_alias_mapping["điện tử"] = full_name
+                if "điện" in lower_full:
+                    self.program_alias_mapping["điện"] = full_name
+                if "môi trường" in lower_full:
+                    self.program_alias_mapping["môi trường"] = full_name
+                if "quản lý công nghiệp" in lower_full:
+                    self.program_alias_mapping["qlcn"] = full_name
+                if "xây dựng" in lower_full:
+                    self.program_alias_mapping["xd"] = full_name
+                if "kiến trúc" in lower_full:
+                    self.program_alias_mapping["kiến trúc"] = full_name
+
 
     def _load_semester_names(self):
         query = """
@@ -159,13 +186,21 @@ class ChatbotLogic:
         self.language_and_certificate_mapping["khung năng lực ngoại ngữ"] = "KhungNangLucNgoaiNguVietNam"
 
     def _extract_program_name(self, lower_question: str) -> str | None:
+        # 1. Kiểm tra khớp tuyệt đối với tên chương trình
         for keyword_variant, standard_name in self.program_name_mapping.items():
             if keyword_variant in lower_question:
                 return standard_name
-        
+
+        # 2. Kiểm tra alias viết tắt hoặc gần đúng
+        for alias, real_name in self.program_alias_mapping.items():
+            if alias in lower_question:
+                return real_name
+
+        # 3. Kiểm tra dạng đặc biệt trong câu hỏi
         if "của chương trình " in lower_question:
             potential_name = lower_question.split("của chương trình ")[1].strip()
             return self.program_name_mapping.get(potential_name.lower(), None)
+    
         elif "ngành " in lower_question:
             parts = lower_question.split("ngành ")[1].strip().split(" ")
             temp_name_parts = []
@@ -175,14 +210,18 @@ class ChatbotLogic:
                 temp_name_parts.append(part)
             potential_name = " ".join(temp_name_parts).strip()
             return self.program_name_mapping.get(potential_name.lower(), None)
+    
         elif "điều kiện tốt nghiệp " in lower_question:
             remaining_question = lower_question.split("điều kiện tốt nghiệp ")[1].strip()
             return self.program_name_mapping.get(remaining_question.lower(), None)
+
         elif "ra trường" in lower_question:
             for keyword_variant, standard_name in self.program_name_mapping.items():
                 if keyword_variant in lower_question and lower_question.find(keyword_variant) < lower_question.find("ra trường"):
                     return standard_name
+
         return None
+
 
     def _extract_semester_name(self, lower_question: str) -> str | None:
         for keyword_variant, standard_name in self.semester_name_mapping.items():
@@ -766,7 +805,12 @@ class ChatbotLogic:
             return "\n".join(context)
 
         # TRƯỜNG HỢP 12: Hỏi về thông tin chương trình đào tạo CỤ THỂ
-        if found_program_name and not any(kw in lower_question for kw in ["điều kiện tốt nghiệp", "tốt nghiệp cần gì", "quy định tốt nghiệp", "học phần", "môn"]):
+                # TRƯỜNG HỢP 12: Hỏi về thông tin chương trình đào tạo CỤ THỂ
+        if found_program_name and (
+            "là gì" in lower_question or lower_question.startswith("chương trình") or
+            re.match(r"^(chương trình|ngành)\s", lower_question)
+        ) and not any(kw in lower_question for kw in ["điều kiện tốt nghiệp", "tốt nghiệp cần gì", "quy định tốt nghiệp", "học phần", "môn"]):
+
             
             program_info_name = found_program_name 
 
@@ -817,12 +861,62 @@ class ChatbotLogic:
                 context.append("Hiện tại không có chương trình đào tạo nào trong đồ thị.")
             
             return "\n".join(context)
+        # TRƯỜNG HỢP 15: Hỏi học phần X là học phần gì
+        if found_course_name and any(kw in lower_question for kw in ["là học phần gì", "thuộc loại học phần nào", "thuộc loại nào"]):
+            query = f"""
+            MATCH (hp {{ten_mon: '{found_course_name}'}})
+            OPTIONAL MATCH (hp)-[:THUOC]->(ct:ChuongTrinhDaoTao)
+            RETURN labels(hp) AS NhomNode,
+                hp.so_tin_chi AS SoTinChi,
+                ct.ten_chuong_trinh AS ChuongTrinhDaoTao
+            """
+            results = self.neo4j_handler.execute_query(query)
 
-        return "Xin lỗi, tôi chưa hiểu câu hỏi của bạn. Bạn có thể thử hỏi về 'điều kiện tốt nghiệp', 'thông tin chương trình', 'học phần', 'khung năng lực ngoại ngữ', hoặc 'danh sách chương trình' nhé!"
+            if results:
+                response_lines = []
+                for result in results:
+                    nhom_labels = result.get("NhomNode", [])
+                    so_tin_chi = result.get("SoTinChi")
+                    chuong_trinh = result.get("ChuongTrinhDaoTao")
+
+                    nhom_label = next((lbl for lbl in nhom_labels if lbl.startswith("HocPhan")), None)
+
+                    if nhom_label:
+                        # Chuyển nhãn sang tiếng Việt
+                        label_vn = nhom_label.replace("HocPhan", "Học phần ").replace("DaiCuong", "Đại cương") \
+                                            .replace("TienQuyet", "Tiên quyết").replace("SongHanh", "Song hành") \
+                                            .replace("KeTiep", "Kế tiếp").replace("TựDo", "Tự do")
+                        response = ""
+                        if chuong_trinh:
+                            response += f"Đối với chương trình đào tạo **{chuong_trinh}**, "
+                        else:
+                            response += f"Trong đồ thị, "
+
+                        response += f"học phần **{found_course_name}** là **{label_vn}**"
+
+                        if so_tin_chi:
+                            response += f", có **{so_tin_chi} tín chỉ**"
+
+                        response += ". "
+                        response_lines.append(response)
+
+                if response_lines:
+                    context.append("".join(response_lines))  # 👈 gộp thành 1 đoạn liền, không xuống dòng
+                else:
+                    context.append(f"Học phần **{found_course_name}** không có nhãn học phần cụ thể trong đồ thị.")
+            else:
+                context.append(f"Không tìm thấy thông tin về học phần **{found_course_name}** trong đồ thị.")
+
+            return "\n".join(context)
+
+        return "Xin lỗi, tôi chưa hiểu câu hỏi của bạn. Bạn có thể thử hỏi về câu khác vê chương trình đào tạo nhé!"
 
     def chat(self, question: str) -> str:
         context = self.query_neo4j_for_context(question)
+
+        #  In đầy đủ ra terminal để dễ kiểm tra
         print(f"\n--- Ngữ cảnh từ Đồ thị Tri thức ---\n{context}\n----------------------------------\n")
 
-        response = self.gemini_handler.generate_response(question, context)
-        return response
+        #  Trả về chỉ nội dung từ Neo4j (không có dòng gạch hay nhãn)
+        return context
+
